@@ -1,0 +1,143 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CANDIDATE
+  RECRUITER
+  HIRING_MANAGER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ApplicationStage {
+  APPLIED
+  SCREEN
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+}
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  name           String
+  passwordHash   String
+  role           Role      @default(CANDIDATE)
+  facilityId     String?
+  facility       Facility? @relation(fields: [facilityId], references: [id])
+  candidate      CandidateProfile?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model Facility {
+  id          String       @id @default(cuid())
+  name        String
+  location    String
+  jobs        JobPosting[]
+  users       User[]
+  applications Application[]
+}
+
+model JobPosting {
+  id            String        @id @default(cuid())
+  title         String
+  department    String
+  description   String
+  isActive      Boolean       @default(true)
+  facilityId    String
+  facility      Facility      @relation(fields: [facilityId], references: [id])
+  applications  Application[]
+  createdAt     DateTime      @default(now())
+}
+
+model CandidateProfile {
+  id             String        @id @default(cuid())
+  phone          String?
+  resumeUrl      String?
+  userId         String        @unique
+  user           User          @relation(fields: [userId], references: [id])
+  licenses       License[]
+  onboardingTasks OnboardingTask[]
+}
+
+model Application {
+  id               String            @id @default(cuid())
+  jobId            String
+  job              JobPosting        @relation(fields: [jobId], references: [id])
+  facilityId       String
+  facility         Facility          @relation(fields: [facilityId], references: [id])
+  candidateName    String
+  candidateEmail   String
+  candidatePhone   String?
+  stage            ApplicationStage  @default(APPLIED)
+  notes            String?
+  availability     String?
+  calendarLink     String?
+  documents        ApplicationDocument[]
+  interviews       Interview[]
+  offers           Offer[]
+  createdAt        DateTime          @default(now())
+}
+
+model ApplicationDocument {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id])
+  name          String
+  fileUrl       String
+  createdAt     DateTime    @default(now())
+}
+
+model Interview {
+  id             String       @id @default(cuid())
+  applicationId  String
+  application    Application  @relation(fields: [applicationId], references: [id])
+  scheduledFor   DateTime?
+  interviewer    String?
+  createdAt      DateTime     @default(now())
+}
+
+model License {
+  id             String     @id @default(cuid())
+  candidateId    String
+  candidate      CandidateProfile @relation(fields: [candidateId], references: [id])
+  type           String
+  number         String
+  expiryDate     DateTime
+}
+
+model Offer {
+  id             String      @id @default(cuid())
+  applicationId  String
+  application    Application @relation(fields: [applicationId], references: [id])
+  letterBody     String
+  status         String      @default("DRAFT")
+  signedBy       String?
+  signedAt       DateTime?
+}
+
+model OnboardingTask {
+  id             String      @id @default(cuid())
+  candidateId    String
+  candidate      CandidateProfile @relation(fields: [candidateId], references: [id])
+  title          String
+  isComplete     Boolean     @default(false)
+  dueDate        DateTime?
+}
+
+model MessageTemplate {
+  id            String   @id @default(cuid())
+  name          String
+  subject       String
+  body          String
+  channel       String   @default("EMAIL")
+  createdAt     DateTime @default(now())
+}
