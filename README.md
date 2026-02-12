@@ -1,11 +1,10 @@
-# Recurring App — Milestone 1
+# Recurring App — Milestone 2
 
-This milestone scaffolds a runnable Python WSGI app with:
+This milestone includes everything from Milestone 1 plus:
 
-- SQLite database setup and seeding.
-- Login + logout using cookie sessions.
-- Role-based access control for admin-only routes.
-- Empeon-like dashboard with tile cards.
+- Admin job posting CRUD (`/admin/jobs`)
+- Public jobs board (`/jobs`)
+- Candidate apply flow (`/jobs/<id>/apply`)
 
 ## Run
 
