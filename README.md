@@ -25,3 +25,15 @@ App URL: `http://localhost:8000`
 ```bash
 pytest
 ```
+
+
+## Vercel live preview (Next.js)
+
+For deploying a Next.js preview environment on Vercel (with Neon/Supabase Postgres), follow:
+
+- `docs/VERCEL_DEPLOYMENT.md`
+
+Config files included:
+
+- `vercel.json`
+- `.env.example`
