@@ -67,6 +67,33 @@ def test_admin_can_create_update_and_delete_job(tmp_path):
         assert deleted is None
 
 
+def test_admin_jobs_form_shows_errors_and_new_job_in_existing_list(tmp_path):
+    db_path = str(tmp_path / "app.db")
+    app = RecurringApp(db_path)
+    app.bootstrap()
+    session_cookie = login_admin(app)
+
+    status, _, body = call(app, build_environ("/admin/jobs", cookie=session_cookie))
+    assert status.startswith("200")
+    assert "type='submit'" in body
+    assert ">Create Job<" in body
+
+    invalid_payload = "title=&department=Finance&location=Remote&description="
+    status, _, body = call(app, build_environ("/admin/jobs", "POST", invalid_payload, session_cookie))
+    assert status.startswith("200")
+    assert "All job fields are required." in body
+
+    create_payload = "title=Office+Manager&department=Operations&location=Denver&description=Coordinate+office+operations"
+    status, headers, _ = call(app, build_environ("/admin/jobs", "POST", create_payload, session_cookie))
+    assert status.startswith("302")
+    assert headers["Location"] == "/admin/jobs"
+
+    status, _, body = call(app, build_environ("/admin/jobs", cookie=session_cookie))
+    assert status.startswith("200")
+    assert "Existing Jobs" in body
+    assert "Office Manager" in body
+
+
 def test_public_jobs_page_and_apply_flow(tmp_path):
     db_path = str(tmp_path / "app.db")
     app = RecurringApp(db_path)
