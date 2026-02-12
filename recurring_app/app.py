@@ -168,7 +168,18 @@ class RecurringApp:
         description = data.get("description", "").strip()
 
         if not all([title, department, location, description]):
-            return self._ok(start_response, self._render_admin_jobs("All job fields are required."))
+            return self._ok(
+                start_response,
+                self._render_admin_jobs(
+                    error="All job fields are required.",
+                    form_data={
+                        "title": title,
+                        "department": department,
+                        "location": location,
+                        "description": description,
+                    },
+                ),
+            )
 
         with connect(self.db_path) as conn:
             conn.execute(
@@ -393,7 +404,8 @@ class RecurringApp:
 </body></html>
 """
 
-    def _render_admin_jobs(self, error: str = "") -> str:
+    def _render_admin_jobs(self, error: str = "", form_data: dict[str, str] | None = None) -> str:
+        form_data = form_data or {}
         with connect(self.db_path) as conn:
             jobs = conn.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
             counts = {row["job_id"]: row["total"] for row in conn.execute("SELECT job_id, COUNT(*) as total FROM applications GROUP BY job_id").fetchall()}
@@ -430,11 +442,11 @@ class RecurringApp:
   {'<p class="error">'+error+'</p>' if error else ''}
   <section class='card'>
     <h3>Create Job</h3>
-    <form method='post' action='/admin/jobs'>
-      <label>Title <input name='title' required></label>
-      <label>Department <input name='department' required></label>
-      <label>Location <input name='location' required></label>
-      <label>Description <textarea name='description' required></textarea></label>
+    <form method='post' action='/admin/jobs' id='create-job-form'>
+      <label>Title <input name='title' value='{form_data.get("title", "")}' required></label>
+      <label>Department <input name='department' value='{form_data.get("department", "")}' required></label>
+      <label>Location <input name='location' value='{form_data.get("location", "")}' required></label>
+      <label>Description <textarea name='description' required>{form_data.get("description", "")}</textarea></label>
       <button class='action create-job-button' type='submit'>Create Job</button>
     </form>
   </section>

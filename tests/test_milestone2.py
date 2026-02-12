@@ -94,6 +94,26 @@ def test_admin_jobs_form_shows_errors_and_new_job_in_existing_list(tmp_path):
     assert "Office Manager" in body
 
 
+def test_create_job_post_route_creates_job_and_shows_it_in_existing_jobs(tmp_path):
+    db_path = str(tmp_path / "app.db")
+    app = RecurringApp(db_path)
+    app.bootstrap()
+    session_cookie = login_admin(app)
+
+    payload = "title=Benefits+Analyst&department=People+Ops&location=Chicago&description=Manage+benefits+vendors"
+    status, headers, _ = call(app, build_environ("/admin/jobs", "POST", payload, session_cookie))
+    assert status.startswith("302")
+    assert headers["Location"] == "/admin/jobs"
+
+    with connect(db_path) as conn:
+        created = conn.execute("SELECT id, title FROM jobs WHERE title = 'Benefits Analyst'").fetchone()
+        assert created is not None
+
+    status, _, body = call(app, build_environ("/admin/jobs", cookie=session_cookie))
+    assert status.startswith("200")
+    assert "Existing Jobs" in body
+    assert "Benefits Analyst" in body
+
 def test_public_jobs_page_and_apply_flow(tmp_path):
     db_path = str(tmp_path / "app.db")
     app = RecurringApp(db_path)
