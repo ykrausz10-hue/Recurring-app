@@ -1,10 +1,11 @@
-# Recurring App — Milestone 2
+# Recurring App — Milestone 3
 
-This milestone includes everything from Milestone 1 plus:
+This milestone includes everything from Milestone 2 plus:
 
-- Admin job posting CRUD (`/admin/jobs`)
-- Public jobs board (`/jobs`)
-- Candidate apply flow (`/jobs/<id>/apply`)
+- ATS pipeline board for admins (`/admin/ats`)
+- Candidate profile view (`/admin/applications/<id>`)
+- Candidate status progression (submitted → screening → interview → offer → hired/rejected)
+- Interview notes and candidate task tracking
 
 ## Run
 
@@ -25,7 +26,6 @@ App URL: `http://localhost:8000`
 ```bash
 pytest
 ```
-
 
 ## Vercel live preview (Next.js)
 
