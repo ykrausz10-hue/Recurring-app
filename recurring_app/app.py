@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from http import cookies
-from typing import Callable
 from urllib.parse import parse_qs
 
 from .auth import SessionUser, make_session_token, verify_password
 from .db import connect, init_db
 from .seed import seed_default_users
+
+
+PIPELINE_STATUSES = ["submitted", "screening", "interview", "offer", "hired", "rejected"]
 
 
 class RecurringApp:
@@ -63,6 +65,29 @@ class RecurringApp:
                 return self._forbidden(start_response, self._render_forbidden(user))
             return self._handle_job_action(path, environ, start_response)
 
+        if path == "/admin/ats" and method == "GET":
+            if not user:
+                return self._redirect(start_response, "/login")
+            if user.role != "admin":
+                return self._forbidden(start_response, self._render_forbidden(user))
+            return self._ok(start_response, self._render_ats_board())
+
+        if path.startswith("/admin/applications/") and method == "GET":
+            if not user:
+                return self._redirect(start_response, "/login")
+            if user.role != "admin":
+                return self._forbidden(start_response, self._render_forbidden(user))
+            app_id = self._parse_admin_application_id(path)
+            return self._ok(start_response, self._render_candidate_profile(app_id)) if app_id else self._not_found(start_response)
+
+        if path.startswith("/admin/applications/") and method == "POST":
+            if not user:
+                return self._redirect(start_response, "/login")
+            if user.role != "admin":
+                return self._forbidden(start_response, self._render_forbidden(user))
+            app_id = self._parse_admin_application_id(path)
+            return self._handle_application_action(app_id, path, environ, start_response, user) if app_id else self._not_found(start_response)
+
         if path == "/jobs" and method == "GET":
             return self._ok(start_response, self._render_public_jobs())
 
@@ -94,6 +119,15 @@ class RecurringApp:
         try:
             return int(parts[1] if parts[0] == "jobs" else parts[2])
         except (ValueError, IndexError):
+            return None
+
+    def _parse_admin_application_id(self, path: str) -> int | None:
+        parts = [p for p in path.split("/") if p]
+        if len(parts) < 3:
+            return None
+        try:
+            return int(parts[2])
+        except ValueError:
             return None
 
     def _handle_login(self, environ, start_response):
@@ -214,6 +248,64 @@ class RecurringApp:
 
         return self._ok(start_response, self._render_apply_success(job["title"]))
 
+    def _handle_application_action(self, application_id: int, path: str, environ, start_response, user: SessionUser):
+        with connect(self.db_path) as conn:
+            exists = conn.execute("SELECT id FROM applications WHERE id = ?", (application_id,)).fetchone()
+            if not exists:
+                return self._not_found(start_response)
+
+            if path.endswith("/status"):
+                status = self._parse_form(environ).get("status", "submitted").strip()
+                if status not in PIPELINE_STATUSES:
+                    status = "submitted"
+                conn.execute("UPDATE applications SET status = ? WHERE id = ?", (status, application_id))
+                conn.commit()
+                return self._redirect(start_response, f"/admin/applications/{application_id}")
+
+            if path.endswith("/notes"):
+                note_text = self._parse_form(environ).get("note_text", "").strip()
+                if note_text:
+                    conn.execute(
+                        """
+                        INSERT INTO candidate_notes(application_id, author_user_id, note_text)
+                        VALUES (?, ?, ?)
+                        """,
+                        (application_id, user.user_id, note_text),
+                    )
+                    conn.commit()
+                return self._redirect(start_response, f"/admin/applications/{application_id}")
+
+            if path.endswith("/tasks"):
+                data = self._parse_form(environ)
+                title = data.get("title", "").strip()
+                due_date = data.get("due_date", "").strip()
+                if title:
+                    conn.execute(
+                        """
+                        INSERT INTO candidate_tasks(application_id, assignee_user_id, title, due_date)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (application_id, user.user_id, title, due_date or None),
+                    )
+                    conn.commit()
+                return self._redirect(start_response, f"/admin/applications/{application_id}")
+
+            if path.endswith("/tasks/complete"):
+                task_id_raw = self._parse_form(environ).get("task_id", "0")
+                try:
+                    task_id = int(task_id_raw)
+                except ValueError:
+                    task_id = 0
+                if task_id:
+                    conn.execute(
+                        "UPDATE candidate_tasks SET status = 'done' WHERE id = ? AND application_id = ?",
+                        (task_id, application_id),
+                    )
+                    conn.commit()
+                return self._redirect(start_response, f"/admin/applications/{application_id}")
+
+        return self._not_found(start_response)
+
     def _current_user(self, environ) -> SessionUser | None:
         token = self._session_token(environ)
         if not token:
@@ -296,7 +388,7 @@ class RecurringApp:
         table_rows = "".join(f"<tr><td>{r['full_name']}</td><td>{r['email']}</td><td>{r['role']}</td></tr>" for r in rows)
         return f"""
 <!doctype html><html><head><title>Admin</title>{STYLE}</head><body>
-<header><h1>Recurring App</h1><nav><a href='/dashboard'>Dashboard</a><a href='/admin/jobs'>Manage Jobs</a></nav></header>
+<header><h1>Recurring App</h1><nav><a href='/dashboard'>Dashboard</a><a href='/admin/jobs'>Manage Jobs</a><a href='/admin/ats'>ATS Pipeline</a></nav></header>
 <main><h2>Admin User Directory</h2><table><tr><th>Name</th><th>Email</th><th>Role</th></tr>{table_rows}</table></main>
 </body></html>
 """
@@ -304,12 +396,7 @@ class RecurringApp:
     def _render_admin_jobs(self, error: str = "") -> str:
         with connect(self.db_path) as conn:
             jobs = conn.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
-            counts = {
-                row["job_id"]: row["total"]
-                for row in conn.execute(
-                    "SELECT job_id, COUNT(*) as total FROM applications GROUP BY job_id"
-                ).fetchall()
-            }
+            counts = {row["job_id"]: row["total"] for row in conn.execute("SELECT job_id, COUNT(*) as total FROM applications GROUP BY job_id").fetchall()}
 
         job_rows = "".join(
             f"""
@@ -337,7 +424,7 @@ class RecurringApp:
         )
         return f"""
 <!doctype html><html><head><title>Admin Jobs</title>{STYLE}</head><body>
-<header><h1>Recurring App</h1><nav><a href='/admin'>Admin</a><a href='/jobs'>Public Jobs</a></nav></header>
+<header><h1>Recurring App</h1><nav><a href='/admin'>Admin</a><a href='/admin/ats'>ATS Pipeline</a><a href='/jobs'>Public Jobs</a></nav></header>
 <main>
   <h2>Job Posting Management</h2>
   {'<p class="error">'+error+'</p>' if error else ''}
@@ -352,6 +439,128 @@ class RecurringApp:
     </form>
   </section>
   <section><h3>Existing Jobs</h3><div class='jobs-grid'>{job_rows or '<p>No jobs yet.</p>'}</div></section>
+</main>
+</body></html>
+"""
+
+    def _render_ats_board(self) -> str:
+        with connect(self.db_path) as conn:
+            apps = conn.execute(
+                """
+                SELECT a.id, a.full_name, a.email, a.status, j.title AS job_title
+                FROM applications a
+                JOIN jobs j ON j.id = a.job_id
+                ORDER BY a.created_at DESC
+                """
+            ).fetchall()
+
+        columns = []
+        for status in PIPELINE_STATUSES:
+            cards = "".join(
+                f"<article class='kanban-card'><h4>{a['full_name']}</h4><p>{a['job_title']}</p><a class='action' href='/admin/applications/{a['id']}'>View profile</a></article>"
+                for a in apps
+                if a["status"] == status
+            )
+            empty = "<p class='hint'>No candidates</p>"
+            columns.append(f"<section class='kanban-col'><h3>{status.title()}</h3>{cards or empty}</section>")
+
+        return f"""
+<!doctype html><html><head><title>ATS Pipeline</title>{STYLE}</head><body>
+<header><h1>Recurring App</h1><nav><a href='/admin'>Admin</a><a href='/admin/jobs'>Manage Jobs</a></nav></header>
+<main>
+  <h2>ATS Pipeline Board</h2>
+  <div class='kanban-board'>{''.join(columns)}</div>
+</main>
+</body></html>
+"""
+
+    def _render_candidate_profile(self, application_id: int, error: str = "") -> str:
+        with connect(self.db_path) as conn:
+            app_row = conn.execute(
+                """
+                SELECT a.*, j.title AS job_title, j.department, j.location
+                FROM applications a
+                JOIN jobs j ON j.id = a.job_id
+                WHERE a.id = ?
+                """,
+                (application_id,),
+            ).fetchone()
+            if not app_row:
+                return "<!doctype html><html><body><h1>Candidate not found</h1></body></html>"
+
+            notes = conn.execute(
+                """
+                SELECT n.note_text, n.created_at, COALESCE(u.full_name, 'System') AS author
+                FROM candidate_notes n
+                LEFT JOIN users u ON u.id = n.author_user_id
+                WHERE n.application_id = ?
+                ORDER BY n.created_at DESC
+                """,
+                (application_id,),
+            ).fetchall()
+            tasks = conn.execute(
+                """
+                SELECT t.id, t.title, t.status, t.due_date, COALESCE(u.full_name, 'Unassigned') AS assignee
+                FROM candidate_tasks t
+                LEFT JOIN users u ON u.id = t.assignee_user_id
+                WHERE t.application_id = ?
+                ORDER BY t.created_at DESC
+                """,
+                (application_id,),
+            ).fetchall()
+
+        note_items = "".join(f"<li><strong>{n['author']}</strong> ({n['created_at']}): {n['note_text']}</li>" for n in notes)
+        task_items = "".join(
+            f"<li>{t['title']} · {t['status']} · {t['assignee']} · due {t['due_date'] or 'TBD'}"
+            + (
+                ""
+                if t["status"] == "done"
+                else f"<form method='post' action='/admin/applications/{application_id}/tasks/complete'><input type='hidden' name='task_id' value='{t['id']}'><button type='submit'>Mark done</button></form>"
+            )
+            + "</li>"
+            for t in tasks
+        )
+        options = "".join(
+            f"<option value='{status}' {'selected' if app_row['status'] == status else ''}>{status.title()}</option>"
+            for status in PIPELINE_STATUSES
+        )
+
+        return f"""
+<!doctype html><html><head><title>Candidate Profile</title>{STYLE}</head><body>
+<header><h1>Recurring App</h1><nav><a href='/admin/ats'>ATS Pipeline</a><a href='/admin/jobs'>Manage Jobs</a></nav></header>
+<main>
+  <h2>Candidate Profile: {app_row['full_name']}</h2>
+  <p class='subtitle'>Applied for {app_row['job_title']} · {app_row['department']} · {app_row['location']}</p>
+  <p>Email: {app_row['email']}</p>
+  <section class='card'>
+    <h3>Resume</h3>
+    <p>{app_row['resume_text']}</p>
+  </section>
+  <section class='card'>
+    <h3>Pipeline Stage</h3>
+    <form method='post' action='/admin/applications/{application_id}/status'>
+      <label>Status <select name='status'>{options}</select></label>
+      <button class='action' type='submit'>Update status</button>
+    </form>
+  </section>
+  <section class='card'>
+    <h3>Interview Notes</h3>
+    {'<p class="error">'+error+'</p>' if error else ''}
+    <form method='post' action='/admin/applications/{application_id}/notes'>
+      <label>Add note <textarea name='note_text' required></textarea></label>
+      <button class='action' type='submit'>Save note</button>
+    </form>
+    <ul>{note_items or '<li>No notes yet.</li>'}</ul>
+  </section>
+  <section class='card'>
+    <h3>Tasks</h3>
+    <form method='post' action='/admin/applications/{application_id}/tasks'>
+      <label>Task title <input name='title' required></label>
+      <label>Due date <input name='due_date' placeholder='YYYY-MM-DD'></label>
+      <button class='action' type='submit'>Create task</button>
+    </form>
+    <ul>{task_items or '<li>No tasks yet.</li>'}</ul>
+  </section>
 </main>
 </body></html>
 """
@@ -428,7 +637,7 @@ class RecurringApp:
 
 STYLE = """
 <style>
-body{margin:0;font-family:Arial,sans-serif;background:#f4f7fb;color:#1b2230}header{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#1b4c9b;color:#fff}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap}a,button{border:1px solid #ffffff99;padding:6px 10px;border-radius:7px;background:transparent;color:#fff;text-decoration:none;cursor:pointer}.action{border-color:#1b4c9b;background:#1b4c9b;color:#fff;display:inline-block}.create-job-button{font-weight:700}.shell{display:flex;justify-content:center;padding-top:60px}.card{width:min(560px,100%);background:#fff;padding:18px;border-radius:12px;box-shadow:0 7px 20px #1b4c9b30}label{display:block;margin-bottom:10px}input,textarea,select{width:100%;margin-top:5px;padding:8px;box-sizing:border-box}.hint{color:#516079}.error{background:#ffdede;padding:8px;border-radius:8px}.subtitle{color:#516079}.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}.tile{background:linear-gradient(145deg,#fff,#edf4ff);border:1px solid #d4e2ff;border-radius:14px;padding:12px;min-height:100px}.label{margin:0;color:#45608b}.value{margin-top:10px;font-size:2rem;color:#123b7a;font-weight:700}main{max-width:1000px;margin:18px auto;padding:0 12px}table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #dfe7f2;padding:8px;text-align:left}.jobs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}.job-card{background:#fff;border:1px solid #dfe7f2;border-radius:12px;padding:12px}.danger{border-color:#b20d2d;color:#b20d2d;background:#fff}
+body{margin:0;font-family:Arial,sans-serif;background:#f4f7fb;color:#1b2230}header{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#1b4c9b;color:#fff}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap}a,button{border:1px solid #ffffff99;padding:6px 10px;border-radius:7px;background:transparent;color:#fff;text-decoration:none;cursor:pointer}.action{border-color:#1b4c9b;background:#1b4c9b;color:#fff;display:inline-block}.create-job-button{font-weight:700}.shell{display:flex;justify-content:center;padding-top:60px}.card{width:min(720px,100%);background:#fff;padding:18px;border-radius:12px;box-shadow:0 7px 20px #1b4c9b30;margin-bottom:12px}label{display:block;margin-bottom:10px}input,textarea,select{width:100%;margin-top:5px;padding:8px;box-sizing:border-box}.hint{color:#516079}.error{background:#ffdede;padding:8px;border-radius:8px}.subtitle{color:#516079}.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}.tile{background:linear-gradient(145deg,#fff,#edf4ff);border:1px solid #d4e2ff;border-radius:14px;padding:12px;min-height:100px}.label{margin:0;color:#45608b}.value{margin-top:10px;font-size:2rem;color:#123b7a;font-weight:700}main{max-width:1100px;margin:18px auto;padding:0 12px}table{width:100%;border-collapse:collapse;background:#fff}th,td{border:1px solid #dfe7f2;padding:8px;text-align:left}.jobs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}.job-card,.kanban-card{background:#fff;border:1px solid #dfe7f2;border-radius:12px;padding:12px}.danger{border-color:#b20d2d;color:#b20d2d;background:#fff}.kanban-board{display:grid;grid-template-columns:repeat(3,minmax(220px,1fr));gap:12px}.kanban-col{background:#e9f0ff;border-radius:12px;padding:10px}ul{padding-left:20px}li{margin-bottom:8px}
 </style>
 """
 

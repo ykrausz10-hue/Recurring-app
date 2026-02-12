@@ -29,7 +29,25 @@ CREATE TABLE IF NOT EXISTS applications (
     full_name TEXT NOT NULL,
     email TEXT NOT NULL,
     resume_text TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'submitted',
+    status TEXT NOT NULL CHECK(status IN ('submitted','screening','interview','offer','hired','rejected')) DEFAULT 'submitted',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS candidate_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    author_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    note_text TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS candidate_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    assignee_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open','done')) DEFAULT 'open',
+    due_date TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
